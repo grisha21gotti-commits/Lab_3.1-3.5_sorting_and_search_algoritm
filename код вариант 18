@@ -1,0 +1,189 @@
+import random
+
+
+def compute_conflicts(colors, edges):
+    """
+    Подсчёт количества конфликтов:
+    конфликт = ребро (u, v), у которого colors[u] == colors[v].
+    edges содержит каждое неориентированное ребро один раз: (u, v), u < v.
+    """
+    conflicts = 0
+    for u, v in edges:
+        if colors[u] == colors[v]:
+            conflicts += 1
+    return conflicts
+
+
+def greedy_coloring(n, adj, k):
+    """
+    Жадная раскраска графа не более чем k цветами.
+    Цвета внутри: 0..k-1.
+    """
+    colors = [-1] * n
+    for v in range(n):
+        used = [False] * k
+        for u in adj[v]:
+            if colors[u] != -1:
+                used[colors[u]] = True
+        c = 0
+        while c < k and used[c]:
+            c += 1
+        if c == k:
+            # теоретически не должно случиться при k >= Delta+1,
+            # но на всякий случай ставим 0
+            c = 0
+        colors[v] = c
+    return colors
+
+
+def tabu_search_coloring(n, edges, k, max_iters=500, tabu_size=10):
+    """
+    Табу-поиск для раскраски с фиксированным числом цветов k.
+
+    Возвращает:
+      best_conf  - минимальное найденное число конфликтов
+      best_cols  - раскраска (список длины n, цвета 0..k-1)
+    """
+    if n == 0:
+        return 0, []
+
+    # можно раскомментировать для воспроизводимости результатов
+    # random.seed(0)
+
+    # начальная раскраска - случайная
+    colors = [random.randrange(k) for _ in range(n)]
+    best_colors = colors[:]
+    best_conf = compute_conflicts(colors, edges)
+    current_conf = best_conf
+
+    # табу-список: последние ходы (vertex, new_color)
+    tabu_list = []      # в порядке от старых к новым
+    tabu_set = set()    # для быстрого поиска
+
+    for _ in range(max_iters):
+        best_move = None
+        best_move_conf = None
+
+        # перебираем все возможные ходы: перекрасить вершину v в цвет c
+        for v in range(n):
+            old_color = colors[v]
+            for new_color in range(k):
+                if new_color == old_color:
+                    continue
+
+                # временно применяем
+                colors[v] = new_color
+                conf = compute_conflicts(colors, edges)
+                colors[v] = old_color
+
+                move = (v, new_color)
+                is_tabu = move in tabu_set
+
+                # критерий аспирации: табу-ход разрешён,
+                # если даёт лучшее глобальное значение
+                if is_tabu and conf >= best_conf:
+                    continue
+
+                if best_move is None or conf < best_move_conf:
+                    best_move = move
+                    best_move_conf = conf
+
+        if best_move is None:
+            # не нашли допустимого хода
+            break
+
+        # применяем лучший ход
+        v, new_color = best_move
+        colors[v] = new_color
+        current_conf = best_move_conf
+
+        # обновляем табу-список
+        if len(tabu_list) >= tabu_size:
+            old_move = tabu_list.pop(0)
+            tabu_set.discard(old_move)
+        tabu_list.append(best_move)
+        tabu_set.add(best_move)
+
+        # обновляем лучшее глобальное решение
+        if current_conf < best_conf:
+            best_conf = current_conf
+            best_colors = colors[:]
+
+        # если конфликтов нет - можно остановиться
+        if best_conf == 0:
+            break
+
+    return best_conf, best_colors
+
+
+def main():
+    print("Введите количество вершин графа:")
+    n = int(input().strip())
+
+    print("Введите количество рёбер графа:")
+    m = int(input().strip())
+
+    edges = []
+    adj = [[] for _ in range(n)]
+
+    print("Введите рёбра (u v), вершины нумеруются с 1:")
+    for _ in range(m):
+        line = input().strip()
+        if not line:
+            continue
+        u_str, v_str = line.split()
+        u = int(u_str) - 1  # переводим в 0..n-1
+        v = int(v_str) - 1
+        if u > v:
+            u, v = v, u
+        edges.append((u, v))
+        adj[u].append(v)
+        adj[v].append(u)
+
+    if n == 0:
+        print("Граф пустой.")
+        return
+
+    # максимальная степень вершины
+    max_deg = max(len(adj[v]) for v in range(n))
+# начальное количество цветов: Delta + 1
+    k_start = max_deg + 1
+    if k_start < 1:
+        k_start = 1
+
+    # начальная жадная раскраска без конфликтов при k_start
+    colors = greedy_coloring(n, adj, k_start)
+    best_conf = compute_conflicts(colors, edges)
+
+    # на всякий случай прогоняем табу-поиск для k_start,
+    # если вдруг жадный дал конфликты (не должен, но мало ли)
+    if best_conf != 0:
+        best_conf, colors = tabu_search_coloring(n, edges, k_start)
+
+    last_good_k = k_start
+    last_good_colors = colors[:]
+
+    # пытаемся уменьшать количество цветов
+    current_k = k_start - 1
+
+    while current_k >= 1:
+        conf, cols = tabu_search_coloring(n, edges, current_k)
+        if conf == 0:
+            # удалось раскрасить граф без конфликтов с меньшим числом цветов
+            last_good_k = current_k
+            last_good_colors = cols[:]
+            current_k -= 1
+        else:
+            # не удалось убрать конфликты при таком числе цветов
+            break
+
+    # вывод результата
+    print("Минимальное найденное количество цветов:", last_good_k)
+    print("Раскраска вершин:")
+    for v in range(n):
+        # выводим цвета, начиная с 1
+        print(f"Вершина {v + 1}: цвет {last_good_colors[v] + 1}")
+
+
+if name == "__main__":
+    main()
